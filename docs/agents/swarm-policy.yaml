@@ -1,0 +1,61 @@
+# Swarm policy — when the collective triggers, and how
+#
+# Read by the orchestrator session. Keep declarative: triggers, budgets, and
+# safety rails. The virtue charter (safety clauses) lives here too so every
+# dispatch inherits it.
+
+version: 1
+
+swarm:
+  # --- When to trigger the swarm -------------------------------------------
+  # The swarm is for FAN-OUT RESEARCH: many independent read-only threads.
+  # A single session loop is better for sequential/dependent work.
+  trigger_when:
+    min_workers: 4          # below this, just do it inline — swarm overhead wins
+    independence_required: true   # tasks must not depend on each other's outputs
+    read_only_default: true      # research/collection/sweeping tasks
+  do_NOT_trigger_when:
+    - task is sequential or each step needs the previous result
+    - task touches money movement, credentials, or family data
+    - output is a single short answer (one agent call is cheaper)
+    - user asked a conversational question (iMessage chat ≠ swarm)
+
+  # --- Profile presets ------------------------------------------------------
+  profiles:
+    sweep:            # daily news / monitoring sweeps
+      workers: 8
+      toolsets: [web]
+      model: cloud-cheap        # glm-5.3-flash:cloud
+      heartbeat: gateway-level (600s)   # no extra per-worker chatter
+    deep:             # COLLECTIVE-25 style full-spectrum research
+      workers: 25
+      toolsets: [web]
+      stagger_waves: 3    # session cap; waves of 3 if restart-config unavailable
+      preflight: tool_check
+    browser:          # heavy workers, uses real browser contexts
+      workers: 6        # ~1GB each; keep under 10 with browsers
+      toolsets: [web, browser]
+      requires: explicit_arsal_approval
+
+  # --- Preflight (before ANY dispatch) --------------------------------------
+  preflight:
+    verify_tools_per_worker: true   # probe first worker; if tools missing, halt wave
+    telemetry: on                   # sampler at 5s; report at end
+    kill_criteria:
+      ram_gb: 55
+      rate_limit_storm: true
+      scope_breach: halt_all
+
+  # --- Safety charter (standing, inherits to every worker) ------------------
+  charter: |
+    READ-ONLY researchers by default; no terminal/file/messaging/scheduling.
+    Orchestrator holds dispatch/monitor/stop. Kill switch on request or
+    criteria. REFUSE over FABRICATE: report capability gaps, never invent
+    sources. No money movement, no credentials, no family-data contact.
+    Escalate: anything beyond scope -> report to orchestrator, stop.
+
+  # --- Reporting -------------------------------------------------------------
+  reporting:
+    style: milestones        # narrate per-wave results inline as they land
+    daily_digest: true       # cron can pull "what is the swarm doing" updates
+    on_completion: aggregate digest + hardware/cost report
