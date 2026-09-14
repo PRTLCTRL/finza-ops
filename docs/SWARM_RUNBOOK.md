@@ -34,7 +34,8 @@ python scripts\swarm_preflight.py --wave <N>
 ```
 All checks must PASS (exit 0). On FAIL, apply the printed `fix:` hints and
 re-run. Current known failures on this box (as of 2026-09-14): web gate +
-web.backend placeholder + caps 3/3 — fix via the T-once block above.
+web.backend placeholder (at any wave), plus caps 3/3 vs wave 8 (caps PASS at
+wave 3) — fix via the T-once block above.
 
 ### T-5min — 2-worker live probe
 Dispatch a 2-worker delegation, toolsets `["web"]`, goal: "call web_search for
