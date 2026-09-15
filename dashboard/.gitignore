@@ -1,0 +1,4 @@
+// .dev.vars holds the local dev value of DASH_TOKEN — never commit it
+.dev.vars
+node_modules/
+.wrangler/

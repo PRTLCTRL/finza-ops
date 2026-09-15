@@ -1,0 +1,18 @@
+{
+  // finza-ops dashboard — Cloudflare Worker (no build step)
+  // Account: PRTL (prtl-labs)
+  "name": "finza-dashboard",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-09-01",
+  "account_id": "6a93f4e0f785a77f95436f494bb13fa3",
+  "workers_dev": true,
+  "observability": { "enabled": true },
+  "kv_namespaces": [
+    { "binding": "PROGRESS", "id": "5d6e6199c5a8443fa94137dbe33b77c9" },
+    { "binding": "HEALTH", "id": "f956fb12847145f68abf70f5cbea38df" }
+  ],
+  "triggers": {
+    // refresh the GitHub issues cache so the phone never eats unauth rate limits
+    "crons": ["*/15 * * * *"]
+  }
+}
