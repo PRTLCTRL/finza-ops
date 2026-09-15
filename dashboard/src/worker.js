@@ -3,7 +3,8 @@
 //
 // Bindings (wrangler.jsonc):
 //   PROGRESS — KV: agent activity feed lines  {ts, agent, ticket, status, note}
-//   HEALTH   — KV: machine health history     {ts, ram, cpu, gateway_state, disk}
+//   HEALTH   — KV: machine health history     {ts, ram, cpu, gateway_state, disk, ...}
+//   CRASH    — KV: crash & restart events     {ts, kind, source, title, proc, ...}
 // Secrets (wrangler secret put):
 //   DASH_TOKEN — shared secret for Basic auth (dashboard) + /health POST (health poster)
 // Optional vars:
@@ -18,6 +19,8 @@ const FEED_PREFIX = "progress:";
 const FEED_LIMIT = 60;
 const HEALTH_KEY = "health:hist"; // rolling array, newest first, capped
 const HEALTH_CAP = 144; // 144 x 10-min samples = 24 h
+const CRASH_KEY = "crash:hist"; // rolling array, newest first, capped
+const CRASH_CAP = 100;
 
 // Columns are fixed so the digest stays scannable.
 const COLUMNS = [
@@ -195,9 +198,9 @@ async function readHealth(env) {
 
 function cleanHealth(sample) {
   const num = (x) => (Number.isFinite(Number(x)) ? Number(x) : null);
-  return {
+  const out = {
     ts: new Date(Number(sample.ts) || Date.now()).toISOString(),
-    ram: num(sample.ram), // GB free
+    ram: num(sample.ram), // GB used (poster sends used; UI labels it)
     ram_total: num(sample.ram_total),
     cpu: num(sample.cpu), // %
     gpu: num(sample.gpu),
@@ -206,6 +209,35 @@ function cleanHealth(sample) {
     gateway_state: String(sample.gateway_state || "unknown").slice(0, 40),
     game: sample.game === true,
   };
+  // crash-observability fields carried alongside each sample (all optional)
+  if (sample.sidecar_alive != null) out.sidecar_alive = sample.sidecar_alive === true;
+  if (sample.sidecar_pid != null) out.sidecar_pid = String(sample.sidecar_pid).slice(0, 12);
+  if (sample.watchdog && typeof sample.watchdog === "object") {
+    out.watchdog = {
+      last_ts: String(sample.watchdog.last_ts || "").slice(0, 32),
+      last_pid: String(sample.watchdog.last_pid || "").slice(0, 12),
+      restarts_24h: Number.isFinite(Number(sample.watchdog.restarts_24h)) ? Number(sample.watchdog.restarts_24h) : 0,
+    };
+  }
+  if (sample.last_stop && typeof sample.last_stop === "object" && sample.last_stop.ts) {
+    out.last_stop = {
+      ts: String(sample.last_stop.ts).slice(0, 32),
+      signal: String(sample.last_stop.signal || "").slice(0, 24),
+      parent_pid: String(sample.last_stop.parent_pid || "").slice(0, 16),
+      parent_name: String(sample.last_stop.parent_name || "").slice(0, 40),
+      recovered_by: String(sample.last_stop.recovered_by || "").slice(0, 24),
+    };
+  }
+  if (sample.last_wer && typeof sample.last_wer === "object" && sample.last_wer.ts) {
+    out.last_wer = {
+      ts: String(sample.last_wer.ts).slice(0, 32),
+      id: String(sample.last_wer.id || "").slice(0, 10),
+      proc: String(sample.last_wer.proc || "").slice(0, 80),
+      sig: String(sample.last_wer.sig || "").slice(0, 40),
+      title: String(sample.last_wer.title || "").slice(0, 180),
+    };
+  }
+  return out;
 }
 
 async function writeHealth(env, sample) {
@@ -216,6 +248,55 @@ async function writeHealth(env, sample) {
   return clean;
 }
 
+// ---- crash & restart events (section 7) -------------------------------------
+
+// Sources, all posted by the local health poster:
+//   wer      — Windows Error Reporting events (Event ID + first message line + process)
+//   gateway  — gateway.log "Shutdown context" lines (signal + parent_pid)
+//   watchdog — watchdog.log pid-change = watchdog-detected restart
+//   sidecar  — photon sidecar port 8789 death signature
+function cleanCrash(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const kind = String(raw.kind || "other").slice(0, 16);
+  const tsMs = Number(raw.ts);
+  const ts = tsMs && Number.isFinite(tsMs) ? new Date(tsMs).toISOString() : null;
+  const title = String(raw.title || "").trim().slice(0, 180);
+  if (!ts || !title) return null;
+  const c = { ts, kind, title };
+  if (raw.source != null) c.source = String(raw.source).slice(0, 40);
+  if (raw.proc != null) c.proc = String(raw.proc).slice(0, 80);
+  if (raw.sig != null) c.sig = String(raw.sig).slice(0, 40);
+  if (raw.parent_pid != null) c.parent_pid = String(raw.parent_pid).slice(0, 16);
+  if (raw.recovered_by != null) c.recovered_by = String(raw.recovered_by).slice(0, 24);
+  return c;
+}
+
+async function readCrashes(env) {
+  const hist = (await env.CRASH.get(CRASH_KEY, "json")) || [];
+  return Array.isArray(hist) ? hist : [];
+}
+
+// Merge poster-submitted events; dedupe on (kind, ts, title) so the 10-min
+// poster can resend the same recent events without flooding the timeline.
+async function mergeCrashes(env, incoming) {
+  if (!Array.isArray(incoming) || incoming.length === 0) return 0;
+  const existing = await readCrashes(env);
+  const seen = new Set(existing.map((c) => `${c.kind}|${c.ts}|${c.title}`));
+  const added = [];
+  for (const raw of incoming.slice(0, 40)) {
+    const c = cleanCrash(raw);
+    if (!c) continue;
+    const k = `${c.kind}|${c.ts}|${c.title}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    added.push(c);
+  }
+  if (added.length > 0) {
+    await env.CRASH.put(CRASH_KEY, JSON.stringify([...added, ...existing].slice(0, CRASH_CAP)));
+  }
+  return added.length;
+}
+
 // ---- routes -----------------------------------------------------------------
 
 async function requireAuth(request, env, { allowQuery = false } = {}) {
@@ -224,6 +305,14 @@ async function requireAuth(request, env, { allowQuery = false } = {}) {
     status: 401,
     headers: { "WWW-Authenticate": 'Basic realm="finza dashboard", charset="UTF-8"', ...htmlHeaders },
   });
+}
+
+// Inline the crash timeline into the page so the Crashes tab paints instantly
+// (one KV read server-side instead of a client round-trip). "<" is escaped so
+// the payload can never break out of the <script> tag.
+function bootHtml(crashes) {
+  const payload = JSON.stringify({ crashes }).replace(/</g, "\\u003c");
+  return HTML.replace("window.__BOOT=null;", `window.__BOOT=${payload};`);
 }
 
 export default {
@@ -244,13 +333,33 @@ export default {
         return json({ error: "bad json" }, 400);
       }
       const saved = await writeHealth(env, body);
-      return json({ ok: true, saved: { ts: saved.ts } });
+      const crashesAdded = await mergeCrashes(env, body.crashes);
+      return json({ ok: true, saved: { ts: saved.ts }, crashes_added: crashesAdded });
     }
 
     if (path === "/health" && method === "GET") {
       const deny = await requireAuth(request, env, { allowQuery: true });
       if (deny) return deny;
       return json({ samples: await readHealth(env) });
+    }
+
+    if (path === "/crashes" && method === "GET") {
+      const deny = await requireAuth(request, env, { allowQuery: true });
+      if (deny) return deny;
+      return json({ events: await readCrashes(env) });
+    }
+
+    if (path === "/crashes" && method === "POST") {
+      const deny = await requireAuth(request, env, { allowQuery: true });
+      if (deny) return deny;
+      let body;
+      try {
+        body = await request.json();
+      } catch {
+        return json({ error: "bad json" }, 400);
+      }
+      const added = await mergeCrashes(env, Array.isArray(body) ? body : [body]);
+      return json({ ok: true, added });
     }
 
     if (path === "/feed" && method === "GET") {
@@ -281,7 +390,7 @@ export default {
     if ((path === "/" || path === "/dashboard") && method === "GET") {
       const deny = await requireAuth(request, env, { allowQuery: true });
       if (deny) return deny;
-      return new Response(HTML, { headers: htmlHeaders });
+      return new Response(bootHtml(await readCrashes(env)), { headers: htmlHeaders });
     }
 
     return new Response("404", { status: 404 });

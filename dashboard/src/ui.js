@@ -1,5 +1,7 @@
 // Single-page dashboard UI — dark, minimal, mobile-first (Arsal checks from phone).
 // Rendered by src/worker.js. No framework, no build step.
+// The worker inlines the crash timeline via window.__BOOT (server-side KV read),
+// so the Crashes tab + banner paint on first paint with zero extra round-trips.
 export const HTML = `<!doctype html>
 <html lang="en" data-theme="dark">
 <head>
@@ -23,14 +25,15 @@ header h1{font-size:17px;font-weight:650}
 header .sub{color:var(--muted);font-size:12px}
 .pill{display:inline-block;padding:2px 9px;border:1px solid var(--line);border-radius:999px;font-size:11px;color:var(--muted);background:var(--panel2)}
 .pill:hover{color:var(--text)}
-.tabs{display:flex;gap:2px;padding:8px 14px 0;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
-.tab{padding:7px 12px;border-radius:8px 8px 0 0;font-size:13px;color:var(--muted);cursor:pointer;background:transparent;border:none;font-family:inherit}
+.tabs{display:flex;gap:2px;padding:8px 14px 0;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5;overflow-x:auto}
+.tab{padding:7px 12px;border-radius:8px 8px 0 0;font-size:13px;color:var(--muted);cursor:pointer;background:transparent;border:none;font-family:inherit;flex:none}
 .tab.active{color:var(--text);background:var(--bg);border:1px solid var(--line);border-bottom-color:var(--bg)}
 main{padding-top:14px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px}
 .card h2{font-size:13px;letter-spacing:.4px;text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:8px}
 .muted{color:var(--muted)}
 .small{font-size:12px}
+.banner{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;border:1px solid #67272c;background:#211318;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:13px}
 .board-h{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;margin:4px 0 10px}
 .board-h h3{font-size:15px}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px}
@@ -44,11 +47,11 @@ main{padding-top:14px}
 .tkt .meta{font-size:11px;color:var(--muted);display:flex;gap:6px;flex-wrap:wrap;margin-top:2px}
 .tkt a{color:inherit}
 .lbl{display:inline-block;padding:0 6px;border:1px solid var(--line);border-radius:999px;font-size:10px;color:var(--muted)}
-.lbl.wayfinder\:map{color:#a371f7;border-color:#a371f7}
-.lbl.wayfinder\:research{color:#dbb7ff;border-color:#8957e5}
-.lbl.wayfinder\:task{color:#58a6ff;border-color:#58a6ff}
-.lbl.wayfinder\:prototype{color:#39c5cf;border-color:#39c5cf}
-.lbl.wayfinder\:grilling{color:#f85149;border-color:#f85149}
+.lbl.wayfinder\\:map{color:#a371f7;border-color:#a371f7}
+.lbl.wayfinder\\:research{color:#dbb7ff;border-color:#8957e5}
+.lbl.wayfinder\\:task{color:#58a6ff;border-color:#58a6ff}
+.lbl.wayfinder\\:prototype{color:#39c5cf;border-color:#39c5cf}
+.lbl.wayfinder\\:grilling{color:#f85149;border-color:#f85149}
 .lbl.ready-for-agent{color:#3fb950;border-color:#3fb950}
 .lbl.ready-for-human{color:#d29922;border-color:#d29922}
 .lbl.needs-info{color:#d29922;border-color:#d29922}
@@ -67,10 +70,11 @@ tr:last-child td{border-bottom:none}
 .feed{list-style:none;max-height:420px;overflow-y:auto}
 .feed li{display:flex;gap:8px;padding:5px 0;border-bottom:1px solid #21262d;font-size:13px;align-items:baseline;flex-wrap:wrap}
 .feed li:last-child{border-bottom:none}
-.feed .ts{color:var(--muted);font-size:11px;flex:none}
+.feed .ts{color:var(--muted);font-size:11px;flex:none;min-width:52px}
 .feed .agent{flex:none;font-weight:600;font-size:12px}
-.feed .note{min-width:0;overflow-wrap:anywhere}
+.feed .note{min-width:0;overflow-wrap:anywhere;flex:1}
 .st-ok{color:var(--ok)}.st-error{color:var(--bad)}.st-started,.st-working{color:var(--acc)}.st-info{color:var(--muted)}
+.k-crash{color:var(--bad)}.k-gateway{color:var(--warn)}.k-watchdog{color:var(--acc)}.k-sidecar{color:var(--bad)}
 .spark{display:block;width:100%;height:44px}
 .kv-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}
 .kv-strip .stat{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px}
@@ -100,15 +104,17 @@ tr:last-child td{border-bottom:none}
     <span class="pill" id="p-src">—</span>
     <span class="pill" style="cursor:pointer" id="p-refresh">refresh</span>
   </div>
-  <div class="sub">backlog wayfinding + agent progress</div>
+  <div class="sub">backlog wayfinding + agent progress + machine health</div>
 </header>
 <div class="tabs">
   <button class="tab active" data-tab="boards">Boards</button>
   <button class="tab" data-tab="feed">Agent feed</button>
   <button class="tab" data-tab="machine">Machine</button>
+  <button class="tab" data-tab="crashes">Crashes</button>
   <button class="tab" data-tab="config">Config</button>
 </div>
 <main class="wrap">
+  <div id="banner" class="banner" style="display:none"></div>
   <div id="tab-boards">
     <div class="card">
       <h2>Board: finza-ops</h2>
@@ -131,10 +137,18 @@ tr:last-child td{border-bottom:none}
     <div class="card">
       <h2>VENGEANCE (i9-13900K, 64 GB)</h2>
       <div class="kv-strip" id="stats"></div>
+      <div id="stopinfo" style="margin-top:8px"></div>
     </div>
     <div class="card">
       <h2>24 h history</h2>
       <div id="sparks"></div>
+    </div>
+  </div>
+  <div id="tab-crashes" style="display:none">
+    <div class="card">
+      <h2>Crash &amp; restart timeline</h2>
+      <ul class="feed" id="crashlist"></ul>
+      <p class="muted small" style="margin-top:8px">Sources: WER events (Application log, catches RADAR_PRE_LEAK_64-style leaks), gateway.log shutdown context (signal + parent_pid), watchdog.log pid changes, sidecar port 8789 death. Deduped on (kind, ts, title).</p>
     </div>
   </div>
   <div id="tab-config" style="display:none">
@@ -154,6 +168,7 @@ tr:last-child td{border-bottom:none}
 </div>
 <script>
 "use strict";
+window.__BOOT=null; // replaced server-side with inline {crashes:[...]}
 var TOKEN = localStorage.getItem("dash_token") || "";
 function $(id){ return document.getElementById(id); }
 function esc(s){ return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){ var m={"&":"&amp;","<":"&lt;",">":"&gt;"}; var cc=c.charCodeAt(0); if(cc===34){return "&quot;"} if(cc===39){return "&#39;"} return m[c]; }); }
@@ -183,7 +198,6 @@ function ago(iso){
 
 var COL_ORDER = ["ready", "in-progress", "done", "blocked", "done-old"];
 var COL_NAMES = { "ready": "ready", "in-progress": "in-progress", "done": "done this week", "blocked": "blocked / stalled", "done-old": "older done" };
-var COL_COLORS = { "ready": "#3fb950", "in-progress": "#d29922", "done": "#8b949e", "blocked": "#f85149", "done-old": "#55606e" };
 
 function fmtRepo(r){ return r.split("/")[1] || r; }
 
@@ -229,10 +243,47 @@ function renderFeed(items){
   }).join("");
 }
 
+// ---- crash & restart observability (section 7) ----
+
+var KIND_NAMES = { "wer": "app crash (WER)", "gateway": "gateway stop", "watchdog": "watchdog restart", "sidecar": "sidecar down", "other": "event" };
+var KIND_ICON = { "wer": "✖", "gateway": "■", "watchdog": "↻", "sidecar": "◌", "other": "•" };
+
+function renderCrashes(events){
+  var ul = $("crashlist");
+  if (!events || !events.length){
+    ul.innerHTML = '<li class="muted small">no crash events recorded — poster collects WER + gateway stop + watchdog + sidecar signals every 10 min</li>';
+    return;
+  }
+  ul.innerHTML = events.slice(0, 40).map(function(c){
+    var icon = KIND_ICON[c.kind] || "•";
+    var kind = KIND_NAMES[c.kind] || c.kind || "event";
+    return '<li><span class="ts">' + esc(ago(c.ts)) + '</span><span class="agent k-' + esc(c.kind || "other") + '">' + icon + ' ' + esc(kind) + '</span>' +
+      '<span class="note"><b>' + esc(c.title) + '</b>' +
+      (c.proc ? ' <span class="muted small">proc ' + esc(c.proc) + '</span>' : '') +
+      (c.sig ? ' <span class="muted small">sig ' + esc(c.sig) + '</span>' : '') +
+      (c.parent_pid ? ' <span class="muted small">parent pid ' + esc(c.parent_pid) + '</span>' : '') +
+      (c.recovered_by ? ' <span class="lbl">recovered by ' + esc(c.recovered_by) + '</span>' : '') +
+      '</span></li>';
+  }).join("");
+}
+
+function renderBanner(events){
+  var el = $("banner");
+  var c = (events || []).find(function(x){ return x.kind !== "other"; });
+  if (!c || (Date.now() - Date.parse(c.ts)) > 864e5){ el.style.display = "none"; return; }
+  el.style.display = "flex";
+  el.innerHTML = '<span class="dot bad"></span><span><b>last crash:</b> ' + esc(c.title) +
+    ' <span class="muted">' + esc(ago(c.ts)) + ' · ' + esc(KIND_NAMES[c.kind] || c.kind) +
+    (c.proc ? ' · ' + esc(c.proc) : '') + (c.recovered_by ? ' · recovered by ' + esc(c.recovered_by) : '') + '</span></span>';
+}
+
+// ---- machine health ---------------------------------------------------------
+
 function spark(id, vals, color){
   var el = $(id);
+  if (!el) return;
   var n = vals.length;
-  if (!n){ el.parentNode.innerHTML = '<p class="muted small">no samples yet</p>'; return; }
+  if (!n){ el.innerHTML = '<p class="muted small">no samples yet</p>'; return; }
   var w = 600, h = 44, pad = 3;
   var min = Math.min.apply(null, vals), max = Math.max.apply(null, vals);
   if (max - min < 1e-9){ max = min + 1; }
@@ -251,6 +302,7 @@ function renderHealth(samples){
   if (!s0){
     strip.innerHTML = '<div class="stat" style="grid-column:1/-1"><div class="v muted">—</div><div class="k">no health samples yet — poster posts every 10 min to /health</div></div>';
     $("sparks").innerHTML = "";
+    $("stopinfo").innerHTML = "";
     return;
   }
   function cls(v, amber, red, invert){
@@ -259,27 +311,42 @@ function renderHealth(samples){
     var bad = invert ? (v < red) : (v > red);
     return bad ? "bad" : ok ? "ok" : "warn";
   }
+  var ramPct = (s0.ram != null && s0.ram_total) ? Math.round(100 * s0.ram / s0.ram_total) : null;
   strip.innerHTML =
-    stat(s0.ram != null ? s0.ram.toFixed(1) + " GB" : "—", "ram free", cls(s0.ram, 16, 8, true)) +
+    stat(s0.ram != null ? s0.ram.toFixed(1) + " GB" : "—", ramPct != null ? "ram used (" + ramPct + "%)" : "ram used", cls(ramPct != null ? ramPct : s0.ram, 80, 90, false)) +
     stat(s0.cpu != null ? Math.round(s0.cpu) + "%" : "—", "cpu", cls(s0.cpu, 60, 85, false)) +
-    stat(s0.gpu != null ? Math.round(s0.gpu) + "%" : "—", "gpu", s0.game ? "warn" : (s0.gpu != null && s0.gpu > 70 ? "warn" : "ok")) +
+    stat(s0.sidecar_alive === true ? "alive" : s0.sidecar_alive === false ? "down" : "—", "sidecar 8789", s0.sidecar_alive === true ? "ok" : s0.sidecar_alive === false ? "bad" : "idle") +
     stat(s0.disk != null ? Math.round(s0.disk) + " GB" : "—", "disk free", cls(s0.disk, 100, 50, true)) +
-    stat(s0.gateway_state || "—", "gateway", s0.gateway_state === "running" ? "ok" : "warn") +
+    stat(s0.gateway_state || "—", "gateway", s0.gateway_state === "running" ? "ok" : "bad") +
+    stat(s0.watchdog ? s0.watchdog.restarts_24h + " restarts" : "—", "watchdog 24 h", s0.watchdog && s0.watchdog.restarts_24h > 0 ? "warn" : "ok") +
     stat(ago(s0.ts), "last seen", (Date.now() - Date.parse(s0.ts)) < 1300e3 ? "ok" : "warn");
+  var extra = "";
+  if (s0.last_stop){
+    extra += '<div class="svc"><span class="dot warn"></span><span class="name">last gateway stop</span><span class="muted small">' +
+      esc(s0.last_stop.signal || "?") + ' · parent ' + esc(s0.last_stop.parent_pid || "?") +
+      (s0.last_stop.parent_name && s0.last_stop.parent_name !== "?" ? ' (' + esc(s0.last_stop.parent_name) + ')' : '') +
+      ' · ' + esc(ago(s0.last_stop.ts)) +
+      (s0.last_stop.recovered_by ? ' · recovered by ' + esc(s0.last_stop.recovered_by) : '') + '</span></div>';
+  }
+  if (s0.last_wer){
+    extra += '<div class="svc"><span class="dot bad"></span><span class="name">last WER event</span><span class="muted small">' +
+      esc(s0.last_wer.proc || "?") + ' · ' + esc(ago(s0.last_wer.ts)) + '</span></div>';
+  }
+  $("stopinfo").innerHTML = extra;
   $("sparks").innerHTML =
-    sparkBlock("ram free GB", "s-ram", "#2ea043") +
-    sparkBlock("cpu %", "s-cpu", "#d29922") +
-    sparkBlock("disk free GB", "s-disk", "#58a6ff");
+    sparkBlock("ram used %", "s-ram") +
+    sparkBlock("cpu %", "s-cpu") +
+    sparkBlock("disk free GB", "s-disk");
   var asc = samples.slice().reverse();
-  spark("s-ram", asc.map(function(x){ return x.ram; }).filter(function(x){ return x != null; }), "#2ea043");
+  spark("s-ram", asc.map(function(x){ return (x.ram != null && x.ram_total) ? Math.round(100 * x.ram / x.ram_total) : (x.ram != null && x.ram < 100 ? x.ram : null); }).filter(function(x){ return x != null; }), "#2ea043");
   spark("s-cpu", asc.map(function(x){ return x.cpu; }).filter(function(x){ return x != null; }), "#d29922");
   spark("s-disk", asc.map(function(x){ return x.disk; }).filter(function(x){ return x != null; }), "#58a6ff");
 }
 function stat(v, k, dotCls){
   return '<div class="stat"><div class="v"><span class="dot ' + dotCls + '"></span> ' + esc(String(v)) + '</div><div class="k">' + esc(k) + '</div></div>';
 }
-function sparkBlock(label, id, color){
-  return '<div class="card" style="padding:8px;margin-bottom:8px"><h2 style="margin-bottom:4px">' + label + '</h2><div id="' + id + '"></div></div';
+function sparkBlock(label, id){
+  return '<div class="card" style="padding:8px;margin-bottom:8px"><h2 style="margin-bottom:4px">' + label + '</h2><div id="' + id + '"></div></div>';
 }
 
 var SERVICES = [
@@ -294,11 +361,10 @@ function renderConfig(data, samples){
   var last = {};
   (data.items || []).forEach(function(it){
     SERVICES.forEach(function(s){
-      var re = new RegExp("\\b" + s.key + "\\b", "i");
+      var re = new RegExp("\\\\b" + s.key + "\\\\b", "i");
       if (re.test((it.note || "") + " " + (it.agent || ""))) { last[s.key] = it.ts; }
     });
   });
-  var fresh = Date.now() - Date.parse(data.fetched_at || 0) < 3600e3;
   $("services").innerHTML = SERVICES.map(function(s){
     var cls, txt;
     if (s.key === "photon"){
@@ -322,22 +388,25 @@ function renderConfig(data, samples){
     }).join("");
 }
 
-var state = { issues: null, feed: null, health: null };
+var state = { issues: null, feed: null, health: null, crash: null };
 function renderAll(){
   if (state.issues) renderBoards(state.issues);
   if (state.feed) { renderFeed(state.feed.items); renderConfig(state.feed, state.health || []); }
   if (state.health) renderHealth(state.health.samples);
+  if (state.crash) { renderCrashes(state.crash.events); renderBanner(state.crash.events); }
 }
 
 function loadAll(){
   api("/issues").then(function(r){ return r.ok ? r.json() : Promise.reject(r.status); }).then(function(d){ state.issues = d; }).catch(function(){});
   api("/feed").then(function(r){ return r.ok ? r.json() : Promise.reject(r.status); }).then(function(d){ state.feed = d; }).catch(function(){});
   api("/health").then(function(r){ return r.ok ? r.json() : Promise.reject(r.status); }).then(function(d){ state.health = d; }).catch(function(){});
+  api("/crashes").then(function(r){ return r.ok ? r.json() : Promise.reject(r.status); }).then(function(d){ state.crash = { events: d.events || [] }; }).catch(function(){});
   setTimeout(renderAll, 600);
 }
 function boot(){
   $("login").style.display = "none";
   $("app").style.display = "block";
+  if (window.__BOOT && window.__BOOT.crashes){ state.crash = { events: window.__BOOT.crashes }; renderCrashes(state.crash.events); renderBanner(state.crash.events); }
   loadAll();
   setInterval(loadAll, 60000);
   if (location.search.indexOf("refresh=1") >= 0){
@@ -348,10 +417,11 @@ document.querySelectorAll(".tab").forEach(function(b){
   b.addEventListener("click", function(){
     document.querySelectorAll(".tab").forEach(function(x){ x.classList.remove("active"); });
     b.classList.add("active");
-    ["boards", "feed", "machine", "config"].forEach(function(t){ $("tab-" + t).style.display = (t === b.dataset.tab ? "block" : "none"); });
+    ["boards", "feed", "machine", "crashes", "config"].forEach(function(t){ $("tab-" + t).style.display = (t === b.dataset.tab ? "block" : "none"); });
     if (b.dataset.tab !== "boards") loadAll();
   });
 });
+$("p-refresh").addEventListener("click", function(){ api("/issues?refresh=1").then(function(){ loadAll(); }); });
 if (TOKEN){
   api("/issues").then(function(r){ if (r.ok) boot(); else if (r.status === 401){ localStorage.removeItem("dash_token"); showLogin(); } else showLogin(); }).catch(showLogin);
 } else {

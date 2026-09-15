@@ -9,7 +9,8 @@
   "observability": { "enabled": true },
   "kv_namespaces": [
     { "binding": "PROGRESS", "id": "5d6e6199c5a8443fa94137dbe33b77c9" },
-    { "binding": "HEALTH", "id": "f956fb12847145f68abf70f5cbea38df" }
+    { "binding": "HEALTH", "id": "f956fb12847145f68abf70f5cbea38df" },
+    { "binding": "CRASH", "id": "457925b05e39409f8d8d051fae176ce1" }
   ],
   "triggers": {
     // refresh the GitHub issues cache so the phone never eats unauth rate limits
