@@ -121,7 +121,9 @@ function slim(issue, nowMs) {
   };
 }
 
-async function fetchBoard(board, headers, nowMs) {
+async function fetchBoard(board, headers) {
+  // Return RAW issues (body needed for wayfinder map parsing); slimming happens
+  // in fetchAllIssues after features are computed.
   const out = [];
   for (let page = 1; page <= 3; page++) {
     const u = `https://api.github.com/repos/${board}/issues?state=all&per_page=100&page=${page}&sort=updated&direction=desc`;
@@ -129,18 +131,87 @@ async function fetchBoard(board, headers, nowMs) {
     if (!r.ok) throw new Error(`github ${board} -> HTTP ${r.status}`);
     const arr = await r.json();
     if (!Array.isArray(arr) || arr.length === 0) break;
-    for (const it of arr) if (!it.pull_request) out.push(slim(it, nowMs));
+    for (const it of arr) if (!it.pull_request) out.push(it);
     if (arr.length < 100) break;
   }
   return out;
+}
+
+// ---- wayfinding: feature progress from wayfinder:map issues ------------------
+// A map issue's body lists children as markdown bullets, optionally with
+// checkboxes. Children are resolved against the same fetch (both repos are in
+// payload), so no extra GitHub calls are needed.
+
+function parseChildren(body) {
+  const out = [];
+  for (const raw of String(body || "").split("\n")) {
+    if (!/^\s*[-*]\s+/.test(raw)) continue;
+    const chk = /^\s*[-*]\s+\[( |x|X)\]/.exec(raw);
+    const nums = raw.match(/#(\d+)/g) || [];
+    if (!nums.length) continue;
+    const cross = /PRTLCTRL\/([a-z0-9._-]+)#/i.exec(raw);
+    for (const t of nums) {
+      const n = Number(t.slice(1));
+      if (n) out.push({ n, repo: cross ? cross[2] : null, checked: chk ? chk[1].toLowerCase() === "x" : null });
+    }
+  }
+  return out;
+}
+
+function computeFeatures(rawIssues, boards) {
+  const labelNames = (it) => (it.labels || []).map((l) => (typeof l === "string" ? l : l.name));
+  const repoOf = (it) => {
+    const m = /PRTLCTRL\/([a-z0-9._-]+)/.exec(it.html_url || "");
+    return m ? m[1] : null;
+  };
+  const byKey = {};
+  for (const it of rawIssues) {
+    if (it.pull_request) continue;
+    const repo = repoOf(it);
+    if (repo) byKey[`${repo}#${it.number}`] = {
+      n: it.number, repo, title: it.title, state: it.state, labels: labelNames(it), url: it.html_url,
+    };
+  }
+  const feats = [];
+  for (const it of rawIssues) {
+    if (it.pull_request || !labelNames(it).includes("wayfinder:map")) continue;
+    const repo = repoOf(it);
+    const kids = [];
+    const seen = new Set();
+    for (const c of parseChildren(it.body)) {
+      const key = `${c.repo || repo}#${c.n}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const child = byKey[key];
+      const closed = c.checked === true || (child ? child.state === "closed" : false);
+      const blocked = child ? (child.labels.some((l) => l === "blocked" || l === "needs-info" || l === "needs-triage") || /HITL|waiting (on|for) arsal|needs arsal/i.test(child.title)) : false;
+      kids.push({ n: c.n, repo: c.repo || repo, title: child ? child.title : `(unresolved #${c.n})`, state: child ? child.state : "unknown", url: child ? child.url : null, closed, blocked });
+    }
+    const done = kids.filter((k) => k.closed).length;
+    const frontier = kids.find((k) => !k.closed && !k.blocked) || null;
+    const blockers = kids.filter((k) => k.blocked && !k.closed);
+    feats.push({
+      repo, n: it.number, title: it.title, url: it.html_url,
+      done, total: kids.length, pct: kids.length ? Math.round((100 * done) / kids.length) : 0,
+      frontier, blockers,
+    });
+  }
+  const order = Object.fromEntries(boards.map((b, i) => [b.split("/")[1], i]));
+  feats.sort((a, b) => (order[a.repo] ?? 99) - (order[b.repo] ?? 99) || a.n - b.n);
+  return feats;
 }
 
 async function fetchAllIssues(env) {
   const headers = { "User-Agent": "finza-dashboard", Accept: "application/vnd.github+json" };
   if (env.GH_TOKEN) headers.Authorization = `Bearer ${env.GH_TOKEN}`;
   const nowMs = Date.now();
-  const boards = await Promise.all(BOARDS.map((b) => fetchBoard(b, headers, nowMs)));
-  return { boards: BOARDS, columns: COLUMNS, fetched_at: new Date().toISOString(), issues: boards.flat() };
+  const raws = await Promise.all(BOARDS.map((b) => fetchBoard(b, headers)));
+  const all = raws.flat();
+  const features = computeFeatures(all, BOARDS);
+  return {
+    boards: BOARDS, columns: COLUMNS, fetched_at: new Date().toISOString(), features,
+    issues: all.map((it) => slim(it, nowMs)),
+  };
 }
 
 async function getIssues(env, forceLive = false) {

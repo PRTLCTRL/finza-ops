@@ -107,7 +107,8 @@ tr:last-child td{border-bottom:none}
   <div class="sub">backlog wayfinding + agent progress + machine health</div>
 </header>
 <div class="tabs">
-  <button class="tab active" data-tab="boards">Boards</button>
+  <button class="tab active" data-tab="wayfinding">Wayfinding</button>
+  <button class="tab" data-tab="boards">Boards</button>
   <button class="tab" data-tab="feed">Agent feed</button>
   <button class="tab" data-tab="machine">Machine</button>
   <button class="tab" data-tab="crashes">Crashes</button>
@@ -115,7 +116,12 @@ tr:last-child td{border-bottom:none}
 </div>
 <main class="wrap">
   <div id="banner" class="banner" style="display:none"></div>
-  <div id="tab-boards">
+  <div id="tab-wayfinding">
+    <p class="muted small" style="margin-bottom:10px">One row per feature (wayfinder map). Progress = closed children / total. "Next" = the frontier — first open, unblocked child. Blockers marked ⛔ usually need you.</p>
+    <div id="featlist"></div>
+    <div class="muted small" id="feat-empty" style="display:none">No wayfinder:map features found on either board yet.</div>
+  </div>
+  <div id="tab-boards" style="display:none">
     <div class="card">
       <h2>Board: finza-ops</h2>
       <div class="grid" id="b-finza-ops"></div>
@@ -200,6 +206,32 @@ var COL_ORDER = ["ready", "in-progress", "done", "blocked", "done-old"];
 var COL_NAMES = { "ready": "ready", "in-progress": "in-progress", "done": "done this week", "blocked": "blocked / stalled", "done-old": "older done" };
 
 function fmtRepo(r){ return r.split("/")[1] || r; }
+
+function renderWayfinding(data){
+  var el = $("featlist");
+  var feats = data.features || [];
+  $("feat-empty").style.display = feats.length ? "none" : "block";
+  el.innerHTML = feats.map(function(f){
+    var pct = f.pct || 0;
+    var barColor = pct === 100 ? "var(--ok)" : pct > 0 ? "var(--acc)" : "var(--muted)";
+    var bar = '<div style="background:var(--panel2);border:1px solid var(--line);border-radius:999px;height:10px;margin:6px 0 8px;overflow:hidden">' +
+      '<div style="width:' + pct + '%;height:100%;background:' + barColor + '"></div></div>';
+    var next = f.frontier
+      ? '<div class="small" style="margin-top:2px"><span class="lbl" style="color:var(--acc);border-color:var(--acc)">next</span> <a href="' + esc(f.frontier.url || "#") + '" target="_blank" rel="noopener">#' + f.frontier.n + " " + esc(f.frontier.title) + '</a></div>'
+      : '<div class="small muted" style="margin-top:2px">no open unblocked children</div>';
+    var blocked = (f.blockers || []).map(function(b){
+      return '<div class="small" style="margin-top:2px"><span class="lbl" style="color:var(--bad);border-color:var(--bad)">⛔ ' + esc(b.n) + '</span> <a href="' + esc(b.url || "#") + '" target="_blank" rel="noopener">' + esc(b.title) + '</a></div>';
+    }).join("");
+    var stats = '<span class="count" style="font-size:12px">' + f.done + "/" + f.total + " done · " + pct + '%</span>';
+    var badge = pct === 100 ? ' <span class="lbl" style="color:var(--ok);border-color:var(--ok)">complete 🎉</span>' : "";
+    return '<div class="card" style="padding:12px 14px">' +
+      '<div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;flex-wrap:wrap">' +
+        '<div><b style="font-size:14px">' + esc(f.title) + '</b>' + badge +
+        ' <span class="muted small">' + esc(fmtRepo(f.repo)) + '#' + f.n + '</span></div>' + stats + '</div>' + bar +
+      '<div class="small muted">children: ' + esc((f.total ? f.total : "none listed")) + '</div>' + next + blocked +
+    '</div>';
+  }).join("");
+}
 
 function renderBoards(data){
   var byBoard = {};
@@ -390,7 +422,7 @@ function renderConfig(data, samples){
 
 var state = { issues: null, feed: null, health: null, crash: null };
 function renderAll(){
-  if (state.issues) renderBoards(state.issues);
+  if (state.issues) { renderBoards(state.issues); renderWayfinding(state.issues); }
   if (state.feed) { renderFeed(state.feed.items); renderConfig(state.feed, state.health || []); }
   if (state.health) renderHealth(state.health.samples);
   if (state.crash) { renderCrashes(state.crash.events); renderBanner(state.crash.events); }
@@ -417,8 +449,8 @@ document.querySelectorAll(".tab").forEach(function(b){
   b.addEventListener("click", function(){
     document.querySelectorAll(".tab").forEach(function(x){ x.classList.remove("active"); });
     b.classList.add("active");
-    ["boards", "feed", "machine", "crashes", "config"].forEach(function(t){ $("tab-" + t).style.display = (t === b.dataset.tab ? "block" : "none"); });
-    if (b.dataset.tab !== "boards") loadAll();
+    ["wayfinding", "boards", "feed", "machine", "crashes", "config"].forEach(function(t){ $("tab-" + t).style.display = (t === b.dataset.tab ? "block" : "none"); });
+    if (b.dataset.tab !== "wayfinding" && b.dataset.tab !== "boards") loadAll();
   });
 });
 $("p-refresh").addEventListener("click", function(){ api("/issues?refresh=1").then(function(){ loadAll(); }); });
