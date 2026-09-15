@@ -457,7 +457,18 @@ $("p-refresh").addEventListener("click", function(){ api("/issues?refresh=1").th
 if (TOKEN){
   api("/issues").then(function(r){ if (r.ok) boot(); else if (r.status === 401){ localStorage.removeItem("dash_token"); showLogin(); } else showLogin(); }).catch(showLogin);
 } else {
-  document.addEventListener("DOMContentLoaded", showLogin);
+  // One-tap links carry ?token= — adopt it into localStorage and boot straight in
+  var qs = new URLSearchParams(location.search);
+  var qt = qs.get("token");
+  if (qt){
+    TOKEN = qt;
+    api("/issues").then(function(r){
+      if (r.ok){ localStorage.setItem("dash_token", qt); boot(); }
+      else showLogin();
+    }).catch(showLogin);
+  } else {
+    document.addEventListener("DOMContentLoaded", showLogin);
+  }
 }
 </script>
 </body>
