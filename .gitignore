@@ -1,0 +1,4 @@
+# Credential vault scaffold (#15) — NEVER commit.
+# The vault is designed to live outside agent/repo reach; a stray `git add -A`
+# must never be able to sweep it into history. Ring-fenced 2026-10-10.
+vault/
